@@ -1,17 +1,148 @@
 {
-  "1": [],
-  "2": [],
-  "3": [],
-  "4": [],
-  "5": [],
-  "6": [],
-  "7": [],
-  "8": [],
-  "9": [],
-  "10": [],
-  "11": [],
-  "12": [],
-  "13": [],
-  "14": [],
-  "15": []
+  "1": [
+    {
+      "name": "KELVIN APPIAGYEI",
+      "code": "FM01"
+    }
+  ],
+  "2": [
+    {
+      "name": "EUNICE DONKOR",
+      "code": "FF01"
+    }
+  ],
+  "3": [
+    {
+      "name": "MOSES TAWIAH",
+      "code": "PG01"
+    },
+    {
+      "name": "FRANCIS KWARTENG",
+      "code": "PG02"
+    },
+    {
+      "name": "MATTHEW LARBI",
+      "code": "PG03"
+    }
+  ],
+  "4": [
+    {
+      "name": "EUNICE DONKOR",
+      "code": "PL01"
+    },
+    {
+      "name": "EMMANUELLA AMPONSAH",
+      "code": "PL02"
+    }
+  ],
+  "5": [
+    {
+      "name": "SOLOMON OPPONG",
+      "code": "IY01"
+    },
+    {
+      "name": "MORDECAI SARPONG",
+      "code": "IY02"
+    }
+  ],
+  "6": [
+    {
+      "name": "KINGSFORD SARFO",
+      "code": "MP01"
+    },
+    {
+      "name": "BENJAMIN SARPONG",
+      "code": "MP02"
+    }
+  ],
+  "7": [
+    {
+      "name": "KARIM BAMBAARE",
+      "code": "YE01"
+    },
+    {
+      "name": "CHARLES BOATENG",
+      "code": "YE02"
+    }
+  ],
+  "8": [
+    {
+      "name": "NHYIRA",
+      "code": "TY01"
+    }
+  ],
+  "9": [
+    {
+      "name": "ELD STEPHEN KOFFIE",
+      "code": "IM01"
+    },
+    {
+      "name": "ELD KENNETH IDUN",
+      "code": "IM02"
+    },
+    {
+      "name": "ELD SOLOMON NIMO",
+      "code": "IM03"
+    }
+  ],
+  "10": [
+    {
+      "name": "LINCY SARFO",
+      "code": "IF01"
+    },
+    {
+      "name": "EMMANUELLA OSMAN",
+      "code": "IF02"
+    },
+    {
+      "name": "ISAACA OSMAN",
+      "code": "IF03"
+    }
+  ],
+  "11": [
+    {
+      "name": "EBENEZER BOAKYE",
+      "code": "FMF01"
+    },
+    {
+      "name": "KINGSFORD SARFO",
+      "code": "FMF02"
+    }
+  ],
+  "12": [
+    {
+      "name": "LINCY SARFO",
+      "code": "FFF01"
+    },
+    {
+      "name": "BENEDICTA DANSOWAA",
+      "code": "FFF02"
+    },
+    {
+      "name": "EMMANUELLA OSMAN",
+      "code": "FFF03"
+    }
+  ],
+  "13": [
+    {
+      "name": "DNCS GLADYS POKUA",
+      "code": "UY01"
+    },
+    {
+      "name": "BENEDICTA DANSOWAA",
+      "code": "UY02"
+    }
+  ],
+  "14": [
+    {
+      "name": "ROBERT SARPONG",
+      "code": "BD01"
+    }
+  ],
+  "15": [
+    {
+      "name": "DNCS VIDA OHENEWAA",
+      "code": "BS01"
+    }
+  ]
 }
