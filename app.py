@@ -150,25 +150,6 @@ def paystack_webhook():
     return jsonify({"received": True, "votes_counted": False}), 200
 
 
-@app.get("/")
-def home():
-    return jsonify({
-        "service": "THE ROYAL AFFAIR 2026 USSD Voting Backend",
-        "status": "online",
-        "ussd_endpoint": "/ussd/callback",
-        "payment_webhook": "/paystack/webhook",
-        "payment_email": PAYMENT_EMAIL,
-        "mode": "test" if os.getenv("PAYSTACK_SECRET_KEY", "").startswith("sk_test_") else "check Paystack key mode"
-    })
-
-@app.get("/health")
-def health():
-    return jsonify({
-        "status": "online",
-        "database": "temporarily disabled",
-        "mode": "development"
-    }), 200
-
 @app.post("/ussd/callback")
 def ussd_callback():
     payload = request.get_json(silent=True) or request.form.to_dict()
