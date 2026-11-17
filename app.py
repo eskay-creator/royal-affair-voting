@@ -4,14 +4,11 @@ import json
 import os
 import re
 import secrets
-from contextlib import contextmanager
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-import psycopg
 import requests
 from flask import Flask, Response, jsonify, request
-from psycopg.types.json import Jsonb
 
 app = Flask(__name__)
 GH_TZ = ZoneInfo("Africa/Accra")
@@ -30,59 +27,6 @@ NETWORKS = {
     "3": ("AT Money", "atl"),
 }
 SESSIONS = {}
-
-def database_url():
-    value = os.getenv("DATABASE_URL", "").strip()
-    if value.startswith("postgres://"):
-        value = "postgresql://" + value[len("postgres://"):]
-    return value
-
-@contextmanager
-def db():
-    url = database_url()
-    if not url:
-        raise RuntimeError("DATABASE_URL is not configured")
-    conn = psycopg.connect(url, connect_timeout=12)
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS vote_payments (
-                    reference TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    phone TEXT NOT NULL,
-                    network TEXT NOT NULL,
-                    provider_code TEXT NOT NULL,
-                    category TEXT NOT NULL,
-                    nominee TEXT NOT NULL,
-                    nominee_code TEXT NOT NULL,
-                    quantity INTEGER NOT NULL CHECK (quantity > 0),
-                    amount_pesewas INTEGER NOT NULL CHECK (amount_pesewas > 0),
-                    status TEXT NOT NULL DEFAULT 'pending',
-                    provider_status TEXT,
-                    provider_response JSONB,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    paid_at TIMESTAMPTZ
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS counted_votes (
-                    id BIGSERIAL PRIMARY KEY,
-                    payment_reference TEXT NOT NULL UNIQUE
-                        REFERENCES vote_payments(reference),
-                    category TEXT NOT NULL,
-                    nominee TEXT NOT NULL,
-                    nominee_code TEXT NOT NULL,
-                    quantity INTEGER NOT NULL CHECK (quantity > 0),
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-            """)
-        conn.commit()
-        yield conn
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
 
 def voting_window():
     now = datetime.now(GH_TZ)
@@ -151,75 +95,60 @@ def normalize_ghana_phone(value):
 def create_payment(state, session_id, phone, network_key):
     network_name, provider = NETWORKS[network_key]
     reference = "RAF26-" + secrets.token_hex(12)
-    amount = state["quantity"] * 100  # GH₵1.00 per vote, in pesewas
-    with db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO vote_payments
-                (reference, session_id, phone, network, provider_code, category,
-                 nominee, nominee_code, quantity, amount_pesewas, status)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'initiating')
-            """, (
-                reference, session_id, phone, network_name, provider,
-                CATEGORIES[state["category_index"]], state["nominee"]["name"],
-                str(state["nominee"]["code"]), state["quantity"], amount
-            ))
-    try:
-        result = paystack_request("POST", "/charge", {
-            "email": PAYMENT_EMAIL,
-            "amount": str(amount),
-            "currency": "GHS",
-            "reference": reference,
-            "mobile_money": {"phone": phone, "provider": provider},
-            "metadata": {
-                "event": "THE ROYAL AFFAIR 2026",
-                "vote_reference": reference,
-                "category": CATEGORIES[state["category_index"]],
-                "nominee": state["nominee"]["name"],
-                "quantity": state["quantity"],
-            }
-        })
-    except Exception:
-        with db() as conn:
-            with conn.cursor() as cur:
-                cur.execute("UPDATE vote_payments SET status='init_failed' WHERE reference=%s", (reference,))
-        raise
-    provider_status = str(result.get("status", "pending"))
-    with db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE vote_payments SET status='pending', provider_status=%s,
-                provider_response=%s WHERE reference=%s
-            """, (provider_status, Jsonb(result), reference))
-    return reference, result, provider_status
+    amount = state["quantity"] * 100
+    result = paystack_request("POST", "/charge", {
+        "email": PAYMENT_EMAIL, "amount": amount, "currency": "GHS",
+        "reference": reference, "mobile_money": {"phone": phone, "provider": provider},
+        "metadata": {"event": "THE ROYAL AFFAIR 2026", "vote_reference": reference,
+            "session_id": session_id, "category": CATEGORIES[state["category_index"]],
+            "nominee": state["nominee"]["name"], "nominee_code": str(state["nominee"]["code"]),
+            "quantity": state["quantity"], "network": network_name}
+    })
+    return reference, result, str(result.get("status", "pending"))
 
-def verify_and_record(reference):
-    verified = paystack_request("GET", "/transaction/verify/" + reference)
-    if verified.get("reference") != reference or verified.get("status") != "success":
-        return False
-    with db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT amount_pesewas, quantity, category, nominee, nominee_code
-                FROM vote_payments WHERE reference=%s FOR UPDATE
-            """, (reference,))
-            row = cur.fetchone()
-            if not row:
-                return False
-            expected_amount, quantity, category, nominee, nominee_code = row
-            if int(verified.get("amount", -1)) != expected_amount or verified.get("currency") != "GHS":
-                cur.execute("UPDATE vote_payments SET status='verification_mismatch' WHERE reference=%s", (reference,))
-                return False
-            cur.execute("""
-                UPDATE vote_payments SET status='success', provider_status='success',
-                paid_at=COALESCE(%s, NOW()) WHERE reference=%s
-            """, (verified.get("paid_at"), reference))
-            cur.execute("""
-                INSERT INTO counted_votes
-                (payment_reference, category, nominee, nominee_code, quantity)
-                VALUES (%s,%s,%s,%s,%s) ON CONFLICT (payment_reference) DO NOTHING
-            """, (reference, category, nominee, nominee_code, quantity))
-    return True
+
+@app.get("/")
+def home():
+    return jsonify({"service": "THE ROYAL AFFAIR 2026 USSD Voting Backend",
+        "status": "online", "ussd_endpoint": "/ussd/callback",
+        "payment_webhook": "/paystack/webhook", "payment_email": PAYMENT_EMAIL,
+        "vote_recording": "manual verification required",
+        "mode": "test" if os.getenv("PAYSTACK_SECRET_KEY", "").startswith("sk_test_") else "check Paystack key mode"})
+
+
+@app.get("/health")
+def health():
+    key = os.getenv("PAYSTACK_SECRET_KEY", "").strip()
+    mode = "test" if key.startswith("sk_test_") else "live" if key.startswith("sk_live_") else "missing"
+    return jsonify({"status": "online", "database": "not used",
+        "vote_recording": "manual review required", "paystack_key_mode": mode}), 200
+
+
+@app.post("/paystack/webhook")
+def paystack_webhook():
+    secret = os.getenv("PAYSTACK_SECRET_KEY", "").strip()
+    signature = request.headers.get("x-paystack-signature", "")
+    raw_body = request.get_data(cache=True)
+    if not secret or not signature:
+        return jsonify({"error": "Missing webhook signature configuration"}), 401
+    expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha512).hexdigest()
+    if not hmac.compare_digest(expected, signature):
+        return jsonify({"error": "Invalid signature"}), 401
+    event = request.get_json(silent=True) or {}
+    if event.get("event") == "charge.success":
+        data = event.get("data") or {}
+        reference = str(data.get("reference") or "")
+        if reference:
+            try:
+                verified = paystack_request("GET", "/transaction/verify/" + reference)
+                if verified.get("reference") == reference and verified.get("status") == "success" and verified.get("currency") == "GHS":
+                    app.logger.info("VERIFIED PAYMENT FOR MANUAL REVIEW: reference=%s amount=%s metadata=%s",
+                        reference, verified.get("amount"), verified.get("metadata"))
+            except Exception:
+                app.logger.exception("Paystack verification failed for %s", reference)
+                return jsonify({"error": "Temporary verification failure"}), 500
+    return jsonify({"received": True, "votes_counted": False}), 200
+
 
 @app.get("/")
 def home():
@@ -374,31 +303,25 @@ def ussd_callback():
         except Exception:
             app.logger.exception("Paystack charge initiation failed")
             SESSIONS.pop(session_id, None)
-            return reply(payload, "We could not start your payment. No votes were recorded. Please try again later.", False)
+            return reply(payload, "We could not start your payment. No vote has been recorded. Please try again later.", False)
         if provider_status == "send_otp":
             state.update(stage="telecel_otp", reference=reference)
             return reply(payload, "Telecel requires a voucher code. Dial *110# on your phone, generate the code, then enter it here.")
         SESSIONS.pop(session_id, None)
-        return reply(payload, "Payment request sent to your MoMo phone. Approve the prompt to pay. Your votes count only after Paystack confirms payment. Ref: " + reference, False)
+        return reply(payload, "Payment request sent to your MoMo phone. Approve it. Save your Paystack reference and receipt, then submit both to the organizers for manual verification. Payment does not automatically count as a vote. Ref: " + reference, False)
 
     if stage == "telecel_otp":
         if not re.fullmatch(r"\d{4,8}", user_data):
             return reply(payload, "Enter the 4-8 digit Telecel voucher code.")
         try:
             result = paystack_request("POST", "/charge/submit_otp", {"otp": user_data, "reference": state["reference"]})
-            with db() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("UPDATE vote_payments SET provider_status=%s, provider_response=%s WHERE reference=%s",
-                                (str(result.get("status", "pending")), Jsonb(result), state["reference"]))
-            if result.get("status") == "success":
-                verify_and_record(state["reference"])
         except Exception:
             app.logger.exception("Telecel OTP submission failed")
             SESSIONS.pop(session_id, None)
             return reply(payload, "We could not submit that voucher code. No votes were recorded. Please try again.", False)
         reference = state["reference"]
         SESSIONS.pop(session_id, None)
-        return reply(payload, "Voucher submitted. Complete any remaining phone prompt. Votes count only after Paystack confirms payment. Ref: " + reference, False)
+        return reply(payload, "Voucher submitted. Complete any remaining phone prompt. Save your receipt and reference, then submit them to the organizers for manual verification. Payment does not automatically count as a vote. Ref: " + reference, False)
 
     SESSIONS.pop(session_id, None)
     return reply(payload, "Your session has expired. Please dial again.", False)
