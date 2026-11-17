@@ -169,29 +169,6 @@ def health():
         "mode": "development"
     }), 200
 
-@app.post("/paystack/webhook")
-def paystack_webhook():
-    secret = os.getenv("PAYSTACK_SECRET_KEY", "").strip()
-    signature = request.headers.get("x-paystack-signature", "")
-    raw_body = request.get_data(cache=True)
-    if not secret or not signature:
-        return jsonify({"error": "Missing webhook signature configuration"}), 401
-    expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha512).hexdigest()
-    if not hmac.compare_digest(expected, signature):
-        return jsonify({"error": "Invalid signature"}), 401
-    event = request.get_json(silent=True) or {}
-    if event.get("event") != "charge.success":
-        return jsonify({"received": True}), 200
-    reference = (event.get("data") or {}).get("reference")
-    if not reference:
-        return jsonify({"received": True}), 200
-    try:
-        verify_and_record(str(reference))
-    except Exception:
-        app.logger.exception("Could not verify Paystack transaction %s", reference)
-        return jsonify({"error": "Temporary verification failure"}), 500
-    return jsonify({"received": True}), 200
-
 @app.post("/ussd/callback")
 def ussd_callback():
     payload = request.get_json(silent=True) or request.form.to_dict()
@@ -318,7 +295,7 @@ def ussd_callback():
         except Exception:
             app.logger.exception("Telecel OTP submission failed")
             SESSIONS.pop(session_id, None)
-            return reply(payload, "We could not submit that voucher code. No votes were recorded. Please try again.", False)
+            return reply(payload, "We could not submit that voucher code. No vote has been recorded. Please try again.", False)
         reference = state["reference"]
         SESSIONS.pop(session_id, None)
         return reply(payload, "Voucher submitted. Complete any remaining phone prompt. Save your receipt and reference, then submit them to the organizers for manual verification. Payment does not automatically count as a vote. Ref: " + reference, False)
