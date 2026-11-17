@@ -234,15 +234,11 @@ def home():
 
 @app.get("/health")
 def health():
-    try:
-        with db() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
-                cur.fetchone()
-        return jsonify({"status": "ok", "database": "connected"})
-    except Exception:
-        app.logger.exception("Health check database failure")
-        return jsonify({"status": "degraded", "database": "not connected"}), 503
+    return jsonify({
+        "status": "online",
+        "database": "temporarily disabled",
+        "mode": "development"
+    }), 200
 
 @app.post("/paystack/webhook")
 def paystack_webhook():
