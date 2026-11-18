@@ -182,10 +182,17 @@ def ussd_callback():
     if not session_id:
         return jsonify({"error": "Missing sessionID"}), 400
 
-    if new_session is True or str(new_session).lower() == "true" or session_id not in SESSIONS:
+    is_new_session = new_session is True or str(new_session).lower() == "true"
+    if is_new_session or session_id not in SESSIONS:
         SESSIONS[session_id] = {"stage": "main", "page": 0}
+
     state = SESSIONS[session_id]
     stage = state["stage"]
+
+    # Arkesel may send the dialled shortcode in userData on the first request.
+    # Always display the welcome menu for a newly opened session.
+    if is_new_session:
+        return reply(payload, "WELCOME TO THE ROYAL AFFAIR 2026\n1. Cast Your Vote\n2. View Award Categories\n3. View Nominees & Codes\n4. Voting Guidelines\n0. Exit")
 
     if stage == "main":
         if user_data == "":
