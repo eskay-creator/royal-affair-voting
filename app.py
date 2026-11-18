@@ -69,8 +69,29 @@ def page_text(title, items, page, page_size=5):
     lines.append("0. Back")
     return "\n".join(lines)
 
-def paystack_request(method, path, payload=None):
+def get_paystack_secret():
+    """Read and normalize the Paystack secret without exposing it."""
     secret = os.getenv("PAYSTACK_SECRET_KEY", "").strip()
+    if len(secret) >= 2 and secret[0] == secret[-1] and secret[0] in ("'", '"'):
+        secret = secret[1:-1].strip()
+    if secret.lower().startswith("bearer "):
+        secret = secret[7:].strip()
+    return secret
+
+
+def paystack_key_mode(secret=None):
+    secret = get_paystack_secret() if secret is None else secret
+    if secret.startswith("sk_test_"):
+        return "test"
+    if secret.startswith("sk_live_"):
+        return "live"
+    if secret.startswith(("pk_test_", "pk_live_")):
+        return "public_key_not_secret"
+    return "missing" if not secret else "unrecognized_format"
+
+
+def paystack_request(method, path, payload=None):
+    secret = get_paystack_secret()
     if not secret:
         raise RuntimeError("PAYSTACK_SECRET_KEY is not configured")
     response = requests.request(
@@ -113,20 +134,22 @@ def home():
         "status": "online", "ussd_endpoint": "/ussd/callback",
         "payment_webhook": "/paystack/webhook", "payment_email": PAYMENT_EMAIL,
         "vote_recording": "manual verification required",
-        "mode": "test" if os.getenv("PAYSTACK_SECRET_KEY", "").startswith("sk_test_") else "check Paystack key mode"})
+        "mode": paystack_key_mode()})
 
 
 @app.get("/health")
 def health():
-    key = os.getenv("PAYSTACK_SECRET_KEY", "").strip()
-    mode = "test" if key.startswith("sk_test_") else "live" if key.startswith("sk_live_") else "missing"
+    key = get_paystack_secret()
+    mode = paystack_key_mode(key)
     return jsonify({"status": "online", "database": "not used",
-        "vote_recording": "manual review required", "paystack_key_mode": mode}), 200
+        "vote_recording": "manual review required",
+        "paystack_key_present": bool(key),
+        "paystack_key_mode": mode}), 200
 
 
 @app.post("/paystack/webhook")
 def paystack_webhook():
-    secret = os.getenv("PAYSTACK_SECRET_KEY", "").strip()
+    secret = get_paystack_secret()
     signature = request.headers.get("x-paystack-signature", "")
     raw_body = request.get_data(cache=True)
     if not secret or not signature:
