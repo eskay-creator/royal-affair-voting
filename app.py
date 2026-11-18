@@ -46,6 +46,20 @@ def redis_command(*parts):
     return body.get("result")
 
 
+def redis_lock(key, value, ttl_seconds):
+    """Atomically claim work so retries cannot process it twice."""
+    return redis_command("SET", key, value, "NX", "EX", ttl_seconds) == "OK"
+
+
+def redis_delete(key):
+    redis_command("DEL", key)
+
+
+def idempotency_key(prefix, reference):
+    digest = hashlib.sha256(str(reference).encode("utf-8")).hexdigest()
+    return f"royal-affair:{prefix}:{digest}"
+
+
 class RedisSessionState(dict):
     def __init__(self, session_id, initial=None):
         self.session_id = session_id
@@ -180,7 +194,7 @@ def normalize_ghana_phone(value):
 
 def create_payment(state, session_id, phone, network_key):
     network_name, provider = NETWORKS[network_key]
-    reference = "RAF26-" + secrets.token_hex(12)
+    reference = state.get("payment_reference") or ("RAF26-" + secrets.token_hex(12))
     amount = state["quantity"] * 100
     result = paystack_request("POST", "/charge", {
         "email": PAYMENT_EMAIL, "amount": amount, "currency": "GHS",
@@ -274,16 +288,27 @@ def paystack_webhook():
         data = event.get("data") or {}
         reference = str(data.get("reference") or "")
         if reference:
+            dedupe_key = idempotency_key("webhook", reference)
             try:
+                claimed = redis_lock(dedupe_key, "processing", 300)
+                if not claimed:
+                    return jsonify({"received": True, "duplicate": True, "votes_counted": False}), 200
+
                 verified = paystack_request("GET", "/transaction/verify/" + reference)
                 if (verified.get("reference") == reference
                         and verified.get("status") == "success"
                         and verified.get("currency") == "GHS"):
                     send_verified_payment_to_sheet(verified)
+                    redis_command("SET", dedupe_key, "completed", "EX", 2592000)
                     app.logger.info("VERIFIED PAYMENT SENT TO REGISTER: reference=%s", reference)
                 else:
+                    redis_delete(dedupe_key)
                     app.logger.warning("Paystack verification did not match webhook reference %s", reference)
             except Exception:
+                try:
+                    redis_delete(dedupe_key)
+                except Exception:
+                    app.logger.exception("Could not release webhook idempotency lock")
                 app.logger.exception("Payment verification or register update failed for %s", reference)
                 return jsonify({"error": "Temporary payment recording failure"}), 500
     return jsonify({"received": True, "votes_counted": False}), 200
@@ -398,13 +423,25 @@ def ussd_callback():
         state["stage"] = "phone"
         return reply(payload, "Enter the MoMo phone number to charge (e.g. 0241234567).")
 
+    if stage == "payment_processing":
+        return reply(payload, "Your payment request is already being processed. Please wait for the MoMo prompt and do not submit the request again.", False)
+
     if stage == "phone":
         phone = normalize_ghana_phone(user_data)
         if not phone:
             return reply(payload, "Invalid Ghana phone number. Enter 10 digits, e.g. 0241234567.")
+        reference = "RAF26-" + secrets.token_hex(12)
+        payment_lock = idempotency_key("ussd-payment", session_id)
         try:
+            if not redis_lock(payment_lock, reference, 120):
+                return reply(payload, "Your payment request is already being processed. Please wait for the MoMo prompt. Do not retry yet.", False)
+            state.update(stage="payment_processing", payment_reference=reference)
             reference, result, provider_status = create_payment(state, session_id, phone, state["network_key"])
         except Exception:
+            try:
+                redis_delete(payment_lock)
+            except Exception:
+                app.logger.exception("Could not release USSD payment lock")
             app.logger.exception("Paystack charge initiation failed")
             SESSIONS.pop(session_id, None)
             return reply(payload, "We could not start your payment. No vote has been recorded. Please try again later.", False)
