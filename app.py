@@ -123,7 +123,7 @@ def create_payment(state, session_id, phone, network_key):
         "metadata": {"event": "THE ROYAL AFFAIR 2026", "vote_reference": reference,
             "session_id": session_id, "category": CATEGORIES[state["category_index"]],
             "nominee": state["nominee"]["name"], "nominee_code": str(state["nominee"]["code"]),
-            "quantity": state["quantity"], "network": network_name}
+            "quantity": state["quantity"], "network": network_name, "phone": phone}
     })
     return reference, result, str(result.get("status", "pending"))
 
@@ -147,6 +147,45 @@ def health():
         "paystack_key_mode": mode}), 200
 
 
+def send_verified_payment_to_sheet(verified):
+    """Forward a Paystack-verified payment to the private Google Sheets endpoint."""
+    endpoint = os.getenv("GOOGLE_SHEETS_WEBAPP_URL", "").strip()
+    shared_secret = os.getenv("GOOGLE_SHEETS_SHARED_SECRET", "")
+    if not endpoint or not shared_secret:
+        raise RuntimeError("Google Sheets integration is not configured")
+
+    metadata = verified.get("metadata") or {}
+    quantity = int(metadata.get("quantity") or 0)
+    amount_pesewas = int(verified.get("amount") or 0)
+    if quantity < 1 or amount_pesewas != quantity * 100:
+        raise RuntimeError("Verified payment amount does not match vote quantity")
+
+    record = {
+        "reference": str(verified.get("reference") or ""),
+        "phone": str(metadata.get("phone") or ""),
+        "category": str(metadata.get("category") or ""),
+        "nominee": str(metadata.get("nominee") or ""),
+        "nominee_code": str(metadata.get("nominee_code") or ""),
+        "votes_purchased": quantity,
+        "amount": amount_pesewas / 100,
+        "currency": str(verified.get("currency") or ""),
+        "network": str(metadata.get("network") or ""),
+        "payment_status": "success"
+    }
+    if not record["reference"] or not record["category"] or not record["nominee_code"]:
+        raise RuntimeError("Verified payment is missing required voting metadata")
+
+    response = requests.post(endpoint, json={
+        "token": shared_secret,
+        "record": record
+    }, timeout=25)
+    response.raise_for_status()
+    result = response.json()
+    if not result.get("success"):
+        raise RuntimeError("Google Sheets rejected the verified payment record")
+    return result
+
+
 @app.post("/paystack/webhook")
 def paystack_webhook():
     secret = get_paystack_secret()
@@ -164,12 +203,16 @@ def paystack_webhook():
         if reference:
             try:
                 verified = paystack_request("GET", "/transaction/verify/" + reference)
-                if verified.get("reference") == reference and verified.get("status") == "success" and verified.get("currency") == "GHS":
-                    app.logger.info("VERIFIED PAYMENT FOR MANUAL REVIEW: reference=%s amount=%s metadata=%s",
-                        reference, verified.get("amount"), verified.get("metadata"))
+                if (verified.get("reference") == reference
+                        and verified.get("status") == "success"
+                        and verified.get("currency") == "GHS"):
+                    send_verified_payment_to_sheet(verified)
+                    app.logger.info("VERIFIED PAYMENT SENT TO REGISTER: reference=%s", reference)
+                else:
+                    app.logger.warning("Paystack verification did not match webhook reference %s", reference)
             except Exception:
-                app.logger.exception("Paystack verification failed for %s", reference)
-                return jsonify({"error": "Temporary verification failure"}), 500
+                app.logger.exception("Payment verification or register update failed for %s", reference)
+                return jsonify({"error": "Temporary payment recording failure"}), 500
     return jsonify({"received": True, "votes_counted": False}), 200
 
 
