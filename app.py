@@ -461,25 +461,25 @@ def ussd_callback():
 
         if status == "pay_offline":
             instructions = display_text or "Check your own MTN MoMo phone for the authorisation prompt."
-            return reply(payload, f"PAYMENT INITIATED\\n{instructions}\\nApprove only if the amount and merchant are correct. Never share your MoMo PIN or OTP.\\nRef: {reference}\\nPayment is not counted as a vote until verified and reviewed.", False)
+            return reply(payload, f"PAYMENT INITIATED\n{instructions}\nApprove only if the amount and merchant are correct. Never share your MoMo PIN or OTP.\nRef: {reference}\nPayment is not counted as a vote until verified and reviewed.", False)
 
         if status == "pending":
-            return reply(payload, f"PAYMENT PENDING\\nPaystack is processing this request. Check your MTN phone for instructions. Do not retry immediately.\\nRef: {reference}\\nNo vote has been counted yet.", False)
+            return reply(payload, f"PAYMENT PENDING\nPaystack is processing this request. Check your MTN phone for instructions. Do not retry immediately.\nRef: {reference}\nNo vote has been counted yet.", False)
 
         if status == "success":
-            return reply(payload, f"PAYMENT RECEIVED\\nPaystack reports success. The backend must verify the transaction before it is entered in the register.\\nRef: {reference}\\nNo vote is counted until verified and reviewed.", False)
+            return reply(payload, f"PAYMENT RECEIVED\nPaystack reports success. The backend must verify the transaction before it is entered in the register.\nRef: {reference}\nNo vote is counted until verified and reviewed.", False)
 
         if status in ("send_otp", "send_pin", "send_phone", "send_birthday", "send_address"):
             detail = display_text or "Paystack requested an additional verification step."
-            return reply(payload, f"PAYMENT NOT COMPLETED\\n{detail}\\nThis USSD service will not collect PINs, OTPs, or verification codes. Contact the event organisers.\\nRef: {reference}\\nNo vote has been counted.", False)
+            return reply(payload, f"PAYMENT NOT COMPLETED\n{detail}\nThis USSD service will not collect PINs, OTPs, or verification codes. Contact the event organisers.\nRef: {reference}\nNo vote has been counted.", False)
 
         if status in ("failed", "timeout"):
             detail = str(result.get("message") or "Paystack could not complete the charge.")
-            return reply(payload, f"PAYMENT FAILED\\n{detail}\\nNo vote has been counted. If your wallet was debited, contact the event organisers with this reference.\\nRef: {reference}", False)
+            return reply(payload, f"PAYMENT FAILED\n{detail}\nNo vote has been counted. If your wallet was debited, contact the event organisers with this reference.\nRef: {reference}", False)
 
         detail = display_text or str(result.get("message") or "Paystack returned an unrecognised payment status.")
         app.logger.warning("Unrecognised Paystack charge status=%s reference=%s", status, reference)
-        return reply(payload, f"PAYMENT STATUS UNCLEAR\\n{detail}\\nDo not retry immediately. Check your wallet transaction history and contact the event organisers.\\nRef: {reference}\\nNo vote has been counted yet.", False)
+        return reply(payload, f"PAYMENT STATUS UNCLEAR\n{detail}\nDo not retry immediately. Check your wallet transaction history and contact the event organisers.\nRef: {reference}\nNo vote has been counted yet.", False)
 
     SESSIONS.pop(session_id, None)
     return reply(payload, "Your session has expired. Please dial again.", False)
