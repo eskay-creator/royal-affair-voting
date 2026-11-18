@@ -26,7 +26,72 @@ NETWORKS = {
     "2": ("Telecel Cash", "vod"),
     "3": ("AT Money", "atl"),
 }
-SESSIONS = {}
+SESSION_TTL_SECONDS = 900
+
+def redis_command(*parts):
+    url = os.getenv("UPSTASH_REDIS_REST_URL", "").strip().rstrip("/")
+    token = os.getenv("UPSTASH_REDIS_REST_TOKEN", "").strip()
+    if not url or not token:
+        raise RuntimeError("Upstash Redis is not configured")
+    response = requests.post(
+        url,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json=list(parts),
+        timeout=8
+    )
+    response.raise_for_status()
+    body = response.json()
+    if "error" in body:
+        raise RuntimeError("Upstash Redis command failed")
+    return body.get("result")
+
+
+class RedisSessionState(dict):
+    def __init__(self, session_id, initial=None):
+        self.session_id = session_id
+        dict.__init__(self, initial or {})
+
+    def persist(self):
+        redis_command(
+            "SET",
+            f"royal-affair:ussd:{self.session_id}",
+            json.dumps(self),
+            "EX",
+            SESSION_TTL_SECONDS
+        )
+
+    def __setitem__(self, key, value):
+        dict.__setitem__(self, key, value)
+        self.persist()
+
+    def update(self, *args, **kwargs):
+        dict.update(self, *args, **kwargs)
+        self.persist()
+
+
+class RedisSessionStore:
+    def key(self, session_id):
+        return f"royal-affair:ussd:{session_id}"
+
+    def __contains__(self, session_id):
+        return redis_command("EXISTS", self.key(session_id)) == 1
+
+    def __getitem__(self, session_id):
+        value = redis_command("GET", self.key(session_id))
+        if value is None:
+            raise KeyError(session_id)
+        return RedisSessionState(session_id, json.loads(value))
+
+    def __setitem__(self, session_id, value):
+        state = RedisSessionState(session_id, value)
+        state.persist()
+
+    def pop(self, session_id, default=None):
+        redis_command("DEL", self.key(session_id))
+        return default
+
+
+SESSIONS = RedisSessionStore()
 
 def voting_window():
     now = datetime.now(GH_TZ)
@@ -141,7 +206,15 @@ def home():
 def health():
     key = get_paystack_secret()
     mode = paystack_key_mode(key)
-    return jsonify({"status": "online", "database": "not used",
+    redis_status = "not_configured"
+    if os.getenv("UPSTASH_REDIS_REST_URL") and os.getenv("UPSTASH_REDIS_REST_TOKEN"):
+        try:
+            redis_status = "connected" if redis_command("PING") == "PONG" else "error"
+        except Exception:
+            app.logger.exception("Upstash Redis health check failed")
+            redis_status = "error"
+    return jsonify({"status": "online", "database": "upstash_redis",
+        "redis_status": redis_status,
         "vote_recording": "manual review required",
         "paystack_key_present": bool(key),
         "paystack_key_mode": mode}), 200
@@ -336,23 +409,10 @@ def ussd_callback():
             SESSIONS.pop(session_id, None)
             return reply(payload, "We could not start your payment. No vote has been recorded. Please try again later.", False)
         if provider_status == "send_otp":
-            state.update(stage="telecel_otp", reference=reference)
-            return reply(payload, "Telecel requires a voucher code. Dial *110# on your phone, generate the code, then enter it here.")
+            SESSIONS.pop(session_id, None)
+            return reply(payload, "This network requires an additional verification step that this USSD service does not support. Do not enter voucher or verification codes here. Please contact the organizers for assistance. Ref: " + reference, False)
         SESSIONS.pop(session_id, None)
         return reply(payload, "Payment request sent to your MoMo phone. Approve it. Save your Paystack reference and receipt, then submit both to the organizers for manual verification. Payment does not automatically count as a vote. Ref: " + reference, False)
-
-    if stage == "telecel_otp":
-        if not re.fullmatch(r"\d{4,8}", user_data):
-            return reply(payload, "Enter the 4-8 digit Telecel voucher code.")
-        try:
-            result = paystack_request("POST", "/charge/submit_otp", {"otp": user_data, "reference": state["reference"]})
-        except Exception:
-            app.logger.exception("Telecel OTP submission failed")
-            SESSIONS.pop(session_id, None)
-            return reply(payload, "We could not submit that voucher code. No vote has been recorded. Please try again.", False)
-        reference = state["reference"]
-        SESSIONS.pop(session_id, None)
-        return reply(payload, "Voucher submitted. Complete any remaining phone prompt. Save your receipt and reference, then submit them to the organizers for manual verification. Payment does not automatically count as a vote. Ref: " + reference, False)
 
     SESSIONS.pop(session_id, None)
     return reply(payload, "Your session has expired. Please dial again.", False)
