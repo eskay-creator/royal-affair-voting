@@ -21,10 +21,9 @@ CATEGORIES = [
     "Most Influential Female", "Most Famous Male", "Most Famous Female",
     "Usher of the Year", "Best Dancer of the Year", "Best Singer of the Year",
 ]
+# MTN only until the other network payment flows are separately confirmed.
 NETWORKS = {
     "1": ("MTN MoMo", "mtn"),
-    "2": ("Telecel Cash", "vod"),
-    "3": ("AT Money", "atl"),
 }
 SESSION_TTL_SECONDS = 900
 
@@ -430,16 +429,9 @@ def ussd_callback():
             SESSIONS.pop(session_id, None)
             return reply(payload, "Vote cancelled. No payment was requested and no votes were recorded.", False)
         if user_data == "1":
-            state["stage"] = "network"
-            return reply(payload, "SELECT MoMo NETWORK\n1. MTN MoMo\n2. Telecel Cash\n3. AT Money")
+            state.update(stage="phone", network_key="1")
+            return reply(payload, "Enter your own MTN MoMo number (e.g. 0241234567). Use the number on the MoMo account you will pay from.")
         return reply(payload, "Choose 1 to continue or 2 to cancel.")
-
-    if stage == "network":
-        if user_data not in NETWORKS:
-            return reply(payload, "Choose 1 for MTN, 2 for Telecel, or 3 for AT Money.")
-        state["network_key"] = user_data
-        state["stage"] = "phone"
-        return reply(payload, "Enter the MoMo phone number to charge (e.g. 0241234567).")
 
     if stage == "payment_processing":
         return reply(payload, "Your payment request is already being processed. Please wait for the MoMo prompt and do not submit the request again.", False)
@@ -463,11 +455,31 @@ def ussd_callback():
             app.logger.exception("Paystack charge initiation failed")
             SESSIONS.pop(session_id, None)
             return reply(payload, "We could not start your payment. No vote has been recorded. Please try again later.", False)
-        if provider_status == "send_otp":
-            SESSIONS.pop(session_id, None)
-            return reply(payload, "This network requires an additional verification step that this USSD service does not support. Do not enter voucher or verification codes here. Please contact the organizers for assistance. Ref: " + reference, False)
         SESSIONS.pop(session_id, None)
-        return reply(payload, "Payment request sent to your MoMo phone. Approve it. Save your Paystack reference and receipt, then submit both to the organizers for manual verification. Payment does not automatically count as a vote. Ref: " + reference, False)
+        display_text = str(result.get("display_text") or "").strip()
+        status = provider_status.strip().lower()
+
+        if status == "pay_offline":
+            instructions = display_text or "Check your own MTN MoMo phone for the authorisation prompt."
+            return reply(payload, f"PAYMENT INITIATED\\n{instructions}\\nApprove only if the amount and merchant are correct. Never share your MoMo PIN or OTP.\\nRef: {reference}\\nPayment is not counted as a vote until verified and reviewed.", False)
+
+        if status == "pending":
+            return reply(payload, f"PAYMENT PENDING\\nPaystack is processing this request. Check your MTN phone for instructions. Do not retry immediately.\\nRef: {reference}\\nNo vote has been counted yet.", False)
+
+        if status == "success":
+            return reply(payload, f"PAYMENT RECEIVED\\nPaystack reports success. The backend must verify the transaction before it is entered in the register.\\nRef: {reference}\\nNo vote is counted until verified and reviewed.", False)
+
+        if status in ("send_otp", "send_pin", "send_phone", "send_birthday", "send_address"):
+            detail = display_text or "Paystack requested an additional verification step."
+            return reply(payload, f"PAYMENT NOT COMPLETED\\n{detail}\\nThis USSD service will not collect PINs, OTPs, or verification codes. Contact the event organisers.\\nRef: {reference}\\nNo vote has been counted.", False)
+
+        if status in ("failed", "timeout"):
+            detail = str(result.get("message") or "Paystack could not complete the charge.")
+            return reply(payload, f"PAYMENT FAILED\\n{detail}\\nNo vote has been counted. If your wallet was debited, contact the event organisers with this reference.\\nRef: {reference}", False)
+
+        detail = display_text or str(result.get("message") or "Paystack returned an unrecognised payment status.")
+        app.logger.warning("Unrecognised Paystack charge status=%s reference=%s", status, reference)
+        return reply(payload, f"PAYMENT STATUS UNCLEAR\\n{detail}\\nDo not retry immediately. Check your wallet transaction history and contact the event organisers.\\nRef: {reference}\\nNo vote has been counted yet.", False)
 
     SESSIONS.pop(session_id, None)
     return reply(payload, "Your session has expired. Please dial again.", False)
