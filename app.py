@@ -470,8 +470,9 @@ def ussd_callback():
             return reply(payload, f"PAYMENT RECEIVED\nPaystack reports success. The backend must verify the transaction before it is entered in the register.\nRef: {reference}\nNo vote is counted until verified and reviewed.", False)
 
         if status in ("send_otp", "send_pin", "send_phone", "send_birthday", "send_address"):
-            detail = display_text or "Paystack requested an additional verification step."
-            return reply(payload, f"PAYMENT NOT COMPLETED\n{detail}\nThis USSD service will not collect PINs, OTPs, or verification codes. Contact the event organisers.\nRef: {reference}\nNo vote has been counted.", False)
+            # Stop this payment flow; never ask the voter to supply a follow-up code.
+            app.logger.warning("Paystack requires additional verification; stopping USSD flow. reference=%s status=%s", reference, status)
+            return reply(payload, f"PAYMENT NOT COMPLETED\\nThis payment method requires an additional verification step that this USSD service does not support. No OTP or PIN will be collected here. Please contact the event organisers.\\nRef: {reference}\\nNo vote has been counted.", False)
 
         if status in ("failed", "timeout"):
             detail = str(result.get("message") or "Paystack could not complete the charge.")
