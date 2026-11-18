@@ -125,15 +125,17 @@ def load_nominees():
         return {}
 
 def reply(payload, message, keep_open=True):
+    # Arkesel's current JSON integration requires all five response fields.
     if request.is_json:
         return jsonify({
-            "sessionID": payload.get("sessionID", payload.get("sessionId", "")),
-            "userID": payload.get("userID", ""),
-            "msisdn": payload.get("msisdn", payload.get("phoneNumber", "")),
-            "message": message,
-            "continueSession": keep_open
+            "sessionID": payload.get("sessionID") or payload.get("sessionId") or payload.get("session_id") or "",
+            "userID": payload.get("userID") or payload.get("userId") or payload.get("user_id") or "",
+            "msisdn": payload.get("msisdn") or payload.get("phoneNumber") or payload.get("phone_number") or "",
+            "message": str(message),
+            "continueSession": bool(keep_open)
         })
-    return Response(("CON " if keep_open else "END ") + message, mimetype="text/plain")
+    # Retain compatibility with Arkesel's legacy form-encoded CON/END flow.
+    return Response(("CON " if keep_open else "END ") + str(message), mimetype="text/plain")
 
 def page_text(title, items, page, page_size=5):
     start = page * page_size
@@ -316,14 +318,30 @@ def paystack_webhook():
 
 @app.post("/ussd/callback")
 def ussd_callback():
-    payload = request.get_json(silent=True) or request.form.to_dict()
-    session_id = str(payload.get("sessionID") or payload.get("sessionId") or "")
-    user_data = str(payload.get("userData") or payload.get("text") or "").strip()
-    new_session = payload.get("newSession", False)
+    # Arkesel integrations may send JSON or legacy form-encoded fields.
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        payload = request.form.to_dict() or request.values.to_dict()
+
+    session_id = str(
+        payload.get("sessionID") or payload.get("sessionId") or
+        payload.get("session_id") or ""
+    ).strip()
+    user_data = str(
+        payload.get("userData") if payload.get("userData") is not None
+        else payload.get("text") if payload.get("text") is not None
+        else payload.get("input") or ""
+    ).strip()
+    new_session = payload.get("newSession", payload.get("new_session", False))
     if not session_id:
+        app.logger.error("Arkesel callback rejected: session identifier missing; content_type=%s",
+                         request.content_type)
         return jsonify({"error": "Missing sessionID"}), 400
 
-    is_new_session = new_session is True or str(new_session).lower() == "true"
+    is_new_session = (
+        new_session is True or
+        str(new_session).strip().lower() in ("true", "1", "yes")
+    )
     if is_new_session or session_id not in SESSIONS:
         SESSIONS[session_id] = {"stage": "main", "page": 0}
 
