@@ -438,7 +438,7 @@ def ussd_callback():
 
     if stage == "payment_otp":
         # Accept only a short numeric OTP; never accept or request a MoMo PIN here.
-        if not re.fullmatch(r"\\d{4,10}", user_data):
+        if not re.fullmatch(r"\d{4,10}", user_data):
             return reply(payload, "Enter the numeric OTP sent by Paystack. Do not enter your MoMo PIN.", True)
 
         attempts = int(state.get("otp_attempts", 0)) + 1
@@ -462,24 +462,24 @@ def ussd_callback():
             state.update(otp_attempts=attempts,
                          otp_display_text=display_text)
             prompt = display_text or "Paystack needs you to enter the OTP again."
-            return reply(payload, f"{prompt}\\nPlease re-enter the OTP. Do not enter your MoMo PIN.", True)
+            return reply(payload, f"{prompt}\nPlease re-enter the OTP. Do not enter your MoMo PIN.", True)
 
         SESSIONS.pop(session_id, None)
 
         if status == "success":
-            return reply(payload, f"PAYMENT SUBMITTED\\nPaystack reports success. The backend will verify it before votes are recorded.\\nRef: {reference}", False)
+            return reply(payload, f"PAYMENT SUBMITTED\nPaystack reports success. The backend will verify it before votes are recorded.\nRef: {reference}", False)
         if status in ("pending", "pay_offline"):
             instructions = display_text or "Follow any payment instructions sent to your phone."
-            return reply(payload, f"PAYMENT PENDING\\n{instructions}\\nYour payment must be verified before votes are recorded.\\nRef: {reference}", False)
+            return reply(payload, f"PAYMENT PENDING\n{instructions}\nYour payment must be verified before votes are recorded.\nRef: {reference}", False)
         if status in ("send_otp", "send_pin", "send_phone", "send_birthday", "send_address"):
             app.logger.warning("Paystack requested unsupported follow-up status=%s reference=%s", status, reference)
-            return reply(payload, f"PAYMENT NOT COMPLETED\\nPaystack requested another verification step that this USSD flow does not support. Do not share your PIN. Contact the organisers.\\nRef: {reference}", False)
+            return reply(payload, f"PAYMENT NOT COMPLETED\nPaystack requested another verification step that this USSD flow does not support. Do not share your PIN. Contact the organisers.\nRef: {reference}", False)
         if status in ("failed", "timeout"):
             detail = str(result.get("message") or "Paystack could not complete the charge.")
-            return reply(payload, f"PAYMENT FAILED\\n{detail}\\nNo vote has been counted. Ref: {reference}", False)
+            return reply(payload, f"PAYMENT FAILED\n{detail}\nNo vote has been counted. Ref: {reference}", False)
         detail = display_text or str(result.get("message") or "Paystack returned an unrecognised status.")
         app.logger.warning("Unrecognised Paystack OTP submission status=%s reference=%s", status, reference)
-        return reply(payload, f"PAYMENT STATUS UNCLEAR\\n{detail}\\nDo not retry immediately. Check your wallet. Ref: {reference}", False)
+        return reply(payload, f"PAYMENT STATUS UNCLEAR\n{detail}\nDo not retry immediately. Check your wallet. Ref: {reference}", False)
 
     if stage == "phone":
         phone = normalize_ghana_phone(user_data)
@@ -509,7 +509,7 @@ def ussd_callback():
             state.update(stage="payment_otp", payment_reference=reference,
                          otp_attempts=0, otp_display_text=display_text)
             prompt = display_text or "Paystack has sent an OTP to your phone."
-            return reply(payload, f"{prompt}\\nEnter the OTP to continue this payment. Do not share it with anyone.", True)
+            return reply(payload, f"{prompt}\nEnter the OTP to continue this payment. Do not share it with anyone.", True)
 
         SESSIONS.pop(session_id, None)
 
@@ -526,7 +526,7 @@ def ussd_callback():
         if status in ("send_otp", "send_pin", "send_phone", "send_birthday", "send_address"):
             # Stop this payment flow; never ask the voter to supply a follow-up code.
             app.logger.warning("Paystack requires additional verification; stopping USSD flow. reference=%s status=%s", reference, status)
-            return reply(payload, f"PAYMENT NOT COMPLETED\\nThis payment method requires an additional verification step that this USSD service does not support. No OTP or PIN will be collected here. Please contact the event organisers.\\nRef: {reference}\\nNo vote has been counted.", False)
+            return reply(payload, f"PAYMENT NOT COMPLETED\nThis payment method requires an additional verification step that this USSD service does not support. No OTP or PIN will be collected here. Please contact the event organisers.\nRef: {reference}\nNo vote has been counted.", False)
 
         if status in ("failed", "timeout"):
             detail = str(result.get("message") or "Paystack could not complete the charge.")
