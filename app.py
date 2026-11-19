@@ -387,8 +387,8 @@ def ussd_callback():
         return reply(payload, f"PAYMENT CONTINUATION\\n{prompt}\\nEnter the OTP sent by Paystack to continue. Do not enter your MoMo PIN.", True)
 
     # Arkesel may send the dialled shortcode in userData on the first request.
-    # Always display the welcome menu for a newly opened session.
-    if is_new_session:
+    # Show the welcome menu only when no pending OTP session was restored.
+    if is_new_session and not resumed_otp:
         return reply(payload, "WELCOME TO THE ROYAL AFFAIR 2026\n1. Cast Your Vote\n2. View Award Categories\n3. View Nominees & Codes\n4. Voting Guidelines\n0. Exit")
 
     if stage == "main":
