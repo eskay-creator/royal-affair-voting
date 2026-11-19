@@ -59,6 +59,31 @@ def idempotency_key(prefix, reference):
     return f"royal-affair:{prefix}:{digest}"
 
 
+def pending_otp_key(caller_phone):
+    digest = hashlib.sha256(str(caller_phone).encode("utf-8")).hexdigest()
+    return f"royal-affair:pending-otp:{digest}"
+
+
+def save_pending_otp(caller_phone, state):
+    if not caller_phone:
+        return False
+    redis_command("SET", pending_otp_key(caller_phone), json.dumps(dict(state)),
+                  "EX", SESSION_TTL_SECONDS)
+    return True
+
+
+def load_pending_otp(caller_phone):
+    if not caller_phone:
+        return None
+    raw = redis_command("GET", pending_otp_key(caller_phone))
+    return json.loads(raw) if raw else None
+
+
+def clear_pending_otp(caller_phone):
+    if caller_phone:
+        redis_delete(pending_otp_key(caller_phone))
+
+
 class RedisSessionState(dict):
     def __init__(self, session_id, initial=None):
         self.session_id = session_id
@@ -341,11 +366,25 @@ def ussd_callback():
         new_session is True or
         str(new_session).strip().lower() in ("true", "1", "yes")
     )
+    caller_phone = normalize_ghana_phone(str(
+        payload.get("msisdn") or payload.get("phoneNumber") or
+        payload.get("phone_number") or ""
+    ))
+    resumed_otp = False
     if is_new_session or session_id not in SESSIONS:
-        SESSIONS[session_id] = {"stage": "main", "page": 0}
+        pending = load_pending_otp(caller_phone)
+        if pending and pending.get("stage") == "payment_otp":
+            SESSIONS[session_id] = pending
+            resumed_otp = True
+        else:
+            SESSIONS[session_id] = {"stage": "main", "page": 0}
 
     state = SESSIONS[session_id]
     stage = state["stage"]
+    if resumed_otp:
+        prompt = str(state.get("otp_display_text") or
+                     "A payment is awaiting its Paystack OTP.")
+        return reply(payload, f"PAYMENT CONTINUATION\\n{prompt}\\nEnter the OTP sent by Paystack to continue. Do not enter your MoMo PIN.", True)
 
     # Arkesel may send the dialled shortcode in userData on the first request.
     # Always display the welcome menu for a newly opened session.
@@ -443,6 +482,7 @@ def ussd_callback():
 
         attempts = int(state.get("otp_attempts", 0)) + 1
         reference = str(state.get("payment_reference") or "")
+        caller_phone = normalize_ghana_phone(str(state.get("caller_phone") or caller_phone or ""))
         if not reference:
             SESSIONS.pop(session_id, None)
             return reply(payload, "This payment session has expired. Please check your wallet before starting another payment.", False)
@@ -455,16 +495,23 @@ def ussd_callback():
             display_text = str(result.get("display_text") or "").strip()
         except Exception:
             app.logger.exception("Paystack OTP submission failed for reference=%s", reference)
+            state.update(otp_attempts=attempts)
+            try:
+                save_pending_otp(caller_phone, state)
+            except Exception:
+                app.logger.exception("Could not preserve pending OTP continuation for reference=%s", reference)
             SESSIONS.pop(session_id, None)
-            return reply(payload, f"We could not confirm the OTP with Paystack. Check your wallet before retrying. Ref: {reference}", False)
+            return reply(payload, f"We could not confirm that OTP. Dial again from the same phone to resume, or contact the organisers. Ref: {reference}", False)
 
         if status == "send_otp" and attempts < 3:
             state.update(otp_attempts=attempts,
                          otp_display_text=display_text)
+            save_pending_otp(caller_phone, state)
             prompt = display_text or "Paystack needs you to enter the OTP again."
-            return reply(payload, f"{prompt}\nPlease re-enter the OTP. Do not enter your MoMo PIN.", True)
+            return reply(payload, f"{prompt}\\nPlease re-enter the OTP. If the session closes, dial again from this same phone. Do not enter your MoMo PIN.", True)
 
         SESSIONS.pop(session_id, None)
+        clear_pending_otp(caller_phone)
 
         if status == "success":
             return reply(payload, f"PAYMENT SUBMITTED\nPaystack reports success. The backend will verify it before votes are recorded.\nRef: {reference}", False)
@@ -507,9 +554,13 @@ def ussd_callback():
             # Keep only the transaction reference and attempt counter in Redis.
             # The OTP itself is never stored or logged.
             state.update(stage="payment_otp", payment_reference=reference,
-                         otp_attempts=0, otp_display_text=display_text)
+                         otp_attempts=0, otp_display_text=display_text,
+                         caller_phone=caller_phone)
+            if not save_pending_otp(caller_phone, state):
+                SESSIONS.pop(session_id, None)
+                return reply(payload, f"Paystack sent an OTP, but caller ID was unavailable so this session cannot be resumed. Ref: {reference}. Please contact the organisers.", False)
             prompt = display_text or "Paystack has sent an OTP to your phone."
-            return reply(payload, f"{prompt}\nEnter the OTP to continue this payment. Do not share it with anyone.", True)
+            return reply(payload, f"{prompt}\\nIf this session closes, dial again from the same phone and enter the OTP to continue. Do not share it with anyone.", True)
 
         SESSIONS.pop(session_id, None)
 
