@@ -434,7 +434,52 @@ def ussd_callback():
         return reply(payload, "Choose 1 to continue or 2 to cancel.")
 
     if stage == "payment_processing":
-        return reply(payload, "Your payment request is already being processed. Please wait for the MoMo prompt and do not submit the request again.", False)
+        return reply(payload, "Your payment request is already being processed. Please wait for the payment instructions and do not submit the request again.", False)
+
+    if stage == "payment_otp":
+        # Accept only a short numeric OTP; never accept or request a MoMo PIN here.
+        if not re.fullmatch(r"\\d{4,10}", user_data):
+            return reply(payload, "Enter the numeric OTP sent by Paystack. Do not enter your MoMo PIN.", True)
+
+        attempts = int(state.get("otp_attempts", 0)) + 1
+        reference = str(state.get("payment_reference") or "")
+        if not reference:
+            SESSIONS.pop(session_id, None)
+            return reply(payload, "This payment session has expired. Please check your wallet before starting another payment.", False)
+
+        try:
+            # The OTP is sent directly to Paystack and is not persisted or logged.
+            result = paystack_request("POST", "/charge/submit_otp",
+                                      {"otp": user_data, "reference": reference})
+            status = str(result.get("status", "pending")).strip().lower()
+            display_text = str(result.get("display_text") or "").strip()
+        except Exception:
+            app.logger.exception("Paystack OTP submission failed for reference=%s", reference)
+            SESSIONS.pop(session_id, None)
+            return reply(payload, f"We could not confirm the OTP with Paystack. Check your wallet before retrying. Ref: {reference}", False)
+
+        if status == "send_otp" and attempts < 3:
+            state.update(otp_attempts=attempts,
+                         otp_display_text=display_text)
+            prompt = display_text or "Paystack needs you to enter the OTP again."
+            return reply(payload, f"{prompt}\\nPlease re-enter the OTP. Do not enter your MoMo PIN.", True)
+
+        SESSIONS.pop(session_id, None)
+
+        if status == "success":
+            return reply(payload, f"PAYMENT SUBMITTED\\nPaystack reports success. The backend will verify it before votes are recorded.\\nRef: {reference}", False)
+        if status in ("pending", "pay_offline"):
+            instructions = display_text or "Follow any payment instructions sent to your phone."
+            return reply(payload, f"PAYMENT PENDING\\n{instructions}\\nYour payment must be verified before votes are recorded.\\nRef: {reference}", False)
+        if status in ("send_otp", "send_pin", "send_phone", "send_birthday", "send_address"):
+            app.logger.warning("Paystack requested unsupported follow-up status=%s reference=%s", status, reference)
+            return reply(payload, f"PAYMENT NOT COMPLETED\\nPaystack requested another verification step that this USSD flow does not support. Do not share your PIN. Contact the organisers.\\nRef: {reference}", False)
+        if status in ("failed", "timeout"):
+            detail = str(result.get("message") or "Paystack could not complete the charge.")
+            return reply(payload, f"PAYMENT FAILED\\n{detail}\\nNo vote has been counted. Ref: {reference}", False)
+        detail = display_text or str(result.get("message") or "Paystack returned an unrecognised status.")
+        app.logger.warning("Unrecognised Paystack OTP submission status=%s reference=%s", status, reference)
+        return reply(payload, f"PAYMENT STATUS UNCLEAR\\n{detail}\\nDo not retry immediately. Check your wallet. Ref: {reference}", False)
 
     if stage == "phone":
         phone = normalize_ghana_phone(user_data)
@@ -455,9 +500,18 @@ def ussd_callback():
             app.logger.exception("Paystack charge initiation failed")
             SESSIONS.pop(session_id, None)
             return reply(payload, "We could not start your payment. No vote has been recorded. Please try again later.", False)
-        SESSIONS.pop(session_id, None)
         display_text = str(result.get("display_text") or "").strip()
         status = provider_status.strip().lower()
+
+        if status == "send_otp":
+            # Keep only the transaction reference and attempt counter in Redis.
+            # The OTP itself is never stored or logged.
+            state.update(stage="payment_otp", payment_reference=reference,
+                         otp_attempts=0, otp_display_text=display_text)
+            prompt = display_text or "Paystack has sent an OTP to your phone."
+            return reply(payload, f"{prompt}\\nEnter the OTP to continue this payment. Do not share it with anyone.", True)
+
+        SESSIONS.pop(session_id, None)
 
         if status == "pay_offline":
             instructions = display_text or "Check your own MTN MoMo phone for the authorisation prompt."
