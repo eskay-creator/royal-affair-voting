@@ -214,6 +214,8 @@ def normalize_ghana_phone(value):
     phone = re.sub(r"[\s-]", "", value)
     if phone.startswith("+233") and len(phone) == 13:
         phone = "0" + phone[4:]
+    elif phone.startswith("233") and len(phone) == 12:
+        phone = "0" + phone[3:]
     if not re.fullmatch(r"0\d{9}", phone):
         return None
     return phone
@@ -351,11 +353,16 @@ def ussd_callback():
         payload.get("sessionID") or payload.get("sessionId") or
         payload.get("session_id") or ""
     ).strip()
-    user_data = str(
-        payload.get("userData") if payload.get("userData") is not None
-        else payload.get("text") if payload.get("text") is not None
-        else payload.get("input") or ""
-    ).strip()
+    # Arkesel may provide userData as the current input, or text as the
+    # cumulative USSD path (for example "1*1*2*024...*123456").
+    # Since each menu stage is already stored in Redis, use only the latest
+    # segment when reading the cumulative text field.
+    if payload.get("userData") is not None:
+        user_data = str(payload.get("userData") or "").strip()
+    elif payload.get("text") is not None:
+        user_data = str(payload.get("text") or "").strip().split("*")[-1].strip()
+    else:
+        user_data = str(payload.get("input") or "").strip()
     new_session = payload.get("newSession", payload.get("new_session", False))
     if not session_id:
         app.logger.error("Arkesel callback rejected: session identifier missing; content_type=%s",
@@ -556,11 +563,18 @@ def ussd_callback():
             state.update(stage="payment_otp", payment_reference=reference,
                          otp_attempts=0, otp_display_text=display_text,
                          caller_phone=caller_phone)
-            if not save_pending_otp(caller_phone, state):
-                SESSIONS.pop(session_id, None)
-                return reply(payload, f"Paystack sent an OTP, but caller ID was unavailable so this session cannot be resumed. Ref: {reference}. Please contact the organisers.", False)
+            # Keep the active USSD session open so the voter can read the SMS
+            # and enter the OTP without starting a new payment. Persist a
+            # phone-keyed recovery copy when Arkesel supplies the caller ID.
+            if caller_phone:
+                try:
+                    save_pending_otp(caller_phone, state)
+                except Exception:
+                    app.logger.exception("Could not save OTP continuation for reference=%s", reference)
+            else:
+                app.logger.warning("Caller ID unavailable; OTP can continue only in the active USSD session. reference=%s", reference)
             prompt = display_text or "Paystack has sent an OTP to your phone."
-            return reply(payload, f"{prompt}\\nIf this session closes, dial again from the same phone and enter the OTP to continue. Do not share it with anyone.", True)
+            return reply(payload, f"{prompt}\\nCheck your SMS, return to this open USSD session, and enter the OTP here. Do not enter or share your MoMo PIN.", True)
 
         SESSIONS.pop(session_id, None)
 
