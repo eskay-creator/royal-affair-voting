@@ -21,9 +21,10 @@ CATEGORIES = [
     "Most Influential Female", "Most Famous Male", "Most Famous Female",
     "Usher of the Year", "Best Dancer of the Year", "Best Singer of the Year",
 ]
-# MTN only until the other network payment flows are separately confirmed.
+# Paystack Ghana provider codes: MTN=mtn, Telecel Cash=vod.
 NETWORKS = {
     "1": ("MTN MoMo", "mtn"),
+    "2": ("Telecel Cash", "vod"),
 }
 SESSION_TTL_SECONDS = 900
 
@@ -475,9 +476,20 @@ def ussd_callback():
             SESSIONS.pop(session_id, None)
             return reply(payload, "Vote cancelled. No payment was requested and no votes were recorded.", False)
         if user_data == "1":
-            state.update(stage="phone", network_key="1")
-            return reply(payload, "Enter your own MTN MoMo number (e.g. 0241234567). Use the number on the MoMo account you will pay from.")
+            state.update(stage="network_selection")
+            return reply(payload, "SELECT PAYMENT NETWORK\\n1. MTN MoMo\\n2. Telecel Cash\\n0. Back")
         return reply(payload, "Choose 1 to continue or 2 to cancel.")
+
+    if stage == "network_selection":
+        if user_data == "0":
+            state.update(stage="confirm")
+            total = state["quantity"]
+            return reply(payload, f"CONFIRM YOUR VOTE\\nCategory: {CATEGORIES[state['category_index']]}\\nContestant: {state['nominee']['name']}\\nVotes: {total}\\nTotal: GHS {total:.2f}\\n1. Continue\\n2. Cancel")
+        if user_data not in NETWORKS:
+            return reply(payload, "Choose 1 for MTN MoMo, 2 for Telecel Cash, or 0 to go back.")
+        state.update(stage="phone", network_key=user_data)
+        network_name = NETWORKS[user_data][0]
+        return reply(payload, f"Enter your own {network_name} number (e.g. 0241234567). Use the number on the wallet you will pay from.")
 
     if stage == "payment_processing":
         return reply(payload, "Your payment request is already being processed. Please wait for the payment instructions and do not submit the request again.", False)
