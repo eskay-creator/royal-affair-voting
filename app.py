@@ -477,7 +477,7 @@ def ussd_callback():
             return reply(payload, "Vote cancelled. No payment was requested and no votes were recorded.", False)
         if user_data == "1":
             state.update(stage="network_selection")
-            return reply(payload, "SELECT PAYMENT NETWORK\\n1. MTN MoMo\\n2. Telecel Cash\\n0. Back")
+            return reply(payload, "     PAYMENT METHOD\\n\\n1. MTN MOBILE MONEY\\n2. TELECEL CASH\\n\\nSelect your preferred network.\\n0. Go Back")
         return reply(payload, "Choose 1 to continue or 2 to cancel.")
 
     if stage == "network_selection":
