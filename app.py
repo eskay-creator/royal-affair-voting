@@ -15,7 +15,7 @@ GH_TZ = ZoneInfo("Africa/Accra")
 PAYSTACK_BASE = "https://api.paystack.co"
 PAYMENT_EMAIL = os.getenv("PAYMENT_EMAIL", "eskay4760@gmail.com")
 CATEGORIES = [
-    "BEST DRESSED MALE", "BEST DRESSED FEMALE", "Perfect Gentleman",
+    "Most Fashionable Male", "Most Fashionable Female", "Perfect Gentleman",
     "Perfect Lady", "Instrumentalist of the Year", "Media Personality of the Year",
     "Youth Executive of the Year", "Teen of the Year", "Most Influential Male",
     "Most Influential Female", "MALE ICON OF THE YEAR", "FEMALE ICON OF THE YEAR",
