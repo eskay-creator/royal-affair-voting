@@ -19,10 +19,6 @@
     {
       "name": "FRANCIS KWARTENG",
       "code": "PG02"
-    },
-    {
-      "name": "MATTHEW ACQUAH",
-      "code": "PG03"
     }
   ],
   "4": [
@@ -143,6 +139,10 @@
     {
       "name": "DNCS VIDA OHENEWAA",
       "code": "BS01"
+    },
+    {
+      "name": "MERCY KWOFFIE",
+      "code": "BS02"
     }
   ]
 }
