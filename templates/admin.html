@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>THE ROYAL AFFAIR 2026 | Live Vote Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root{color-scheme:dark;--bg:#090d18;--panel:#121a2b;--gold:#d8b45b;--muted:#9aa7bd}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,#1b2942,var(--bg) 55%);color:#f7f4ec;font-family:Arial,sans-serif}
+    main{max-width:1050px;margin:auto;padding:30px 18px 50px}.brand{text-align:center;margin-bottom:26px}
+    .brand small{letter-spacing:4px;color:var(--gold)}h1{font-size:clamp(25px,5vw,42px);margin:10px 0}
+    .sub{color:var(--muted)}.panel{background:var(--panel);border:1px solid #293650;border-radius:18px;padding:22px;margin:18px 0;box-shadow:0 15px 40px #0004}
+    label{display:block;color:var(--muted);margin-bottom:8px}select{width:100%;max-width:520px;padding:13px;border-radius:9px;border:1px solid #43516b;background:#0b1220;color:white;font-size:16px}
+    .stats{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0}.stat{background:#0b1220;padding:14px 18px;border-radius:12px;min-width:150px;flex:1}
+    .stat strong{display:block;font-size:27px;color:var(--gold);margin-top:5px}.stat span{color:var(--muted);font-size:13px}
+    .chart-wrap{height:340px;max-width:650px;margin:12px auto}.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;margin-top:8px}
+    th,td{text-align:left;padding:13px 10px;border-bottom:1px solid #293650}th{color:var(--gold);font-size:13px;text-transform:uppercase}
+    .status{color:var(--muted);font-size:13px;margin-top:14px}.error{color:#ff9b9b}
+    @media(max-width:600px){main{padding:22px 12px}.panel{padding:16px}.chart-wrap{height:280px}}
+  </style>
+</head>
+<body>
+<main>
+  <header class="brand"><small>THE ROYAL AFFAIR</small><h1>2026 LIVE VOTE DASHBOARD</h1><div class="sub">Live contestant vote distribution</div></header>
+  <section class="panel">
+    <label for="category">Select award category</label>
+    <select id="category"><option value="">Loading categories…</option></select>
+    <div class="stats">
+      <div class="stat"><span>TOTAL VOTES IN CATEGORY</span><strong id="totalVotes">—</strong></div>
+      <div class="stat"><span>CONTESTANTS</span><strong id="contestantCount">—</strong></div>
+    </div>
+    <div class="chart-wrap"><canvas id="voteChart" aria-label="Pie chart showing contestant vote totals"></canvas></div>
+    <div class="table-wrap"><table><thead><tr><th>Contestant</th><th>Votes</th><th>Share</th></tr></thead><tbody id="voteRows"><tr><td colspan="3">Waiting for vote totals…</td></tr></tbody></table></div>
+    <div class="status" id="status">Connecting to vote register…</div>
+  </section>
+</main>
+<script>
+let chart;
+let latestCategories={};
+const select=document.getElementById('category');
+const number=n=>Number(n||0).toLocaleString();
+function rowsFor(value){
+  if(Array.isArray(value)) return value.map(x=>({name:x.nominee||x.name||x.contestant||'Unknown contestant',votes:Number(x.votes||x.total_votes||0)}));
+  if(value&&typeof value==='object') return Object.entries(value).map(([name,votes])=>({name,votes:Number(votes||0)}));
+  return [];
+}
+function render(){
+  const key=select.value;const rows=rowsFor(latestCategories[key]).sort((a,b)=>b.votes-a.votes);
+  const total=rows.reduce((sum,x)=>sum+x.votes,0);
+  document.getElementById('totalVotes').textContent=number(total);
+  document.getElementById('contestantCount').textContent=number(rows.length);
+  document.getElementById('voteRows').innerHTML=rows.length?rows.map(x=>'<tr><td>'+escapeHtml(x.name)+'</td><td>'+number(x.votes)+'</td><td>'+((total?x.votes/total*100:0).toFixed(1))+'%</td></tr>').join(''):'<tr><td colspan="3">No successful votes recorded yet.</td></tr>';
+  const ctx=document.getElementById('voteChart');
+  if(chart)chart.destroy();
+  chart=new Chart(ctx,{type:'pie',data:{labels:rows.map(x=>x.name),datasets:[{data:rows.map(x=>x.votes),borderWidth:2,borderColor:'#121a2b'}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{color:'#f7f4ec',padding:16}},tooltip:{callbacks:{label:c=>c.label+': '+number(c.raw)+' votes'}}}}});
+}
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+async function refresh(){
+  try{
+    const response=await fetch('/api/vote-results',{cache:'no-store'});
+    const data=await response.json();
+    if(!response.ok||!data.success)throw new Error(data.error||'Unable to retrieve vote totals');
+    latestCategories=data.categories||{};
+    const old=select.value;
+    select.innerHTML=Object.keys(latestCategories).map(k=>'<option value="'+escapeHtml(k)+'">'+escapeHtml(k)+'</option>').join('');
+    if(old&&latestCategories[old]!==undefined)select.value=old;
+    else if(select.options.length)select.selectedIndex=0;
+    render();
+    document.getElementById('status').textContent='Last updated: '+new Date(data.updated_at||Date.now()).toLocaleString()+' · Refreshes every 15 seconds';
+    document.getElementById('status').className='status';
+  }catch(err){document.getElementById('status').textContent=err.message;document.getElementById('status').className='status error';}
+}
+select.addEventListener('change',render);refresh();setInterval(refresh,15000);
+</script>
+</body>
+</html>
