@@ -8,7 +8,7 @@ from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
-from flask import Flask, Response, jsonify, request
+from flask import Flask, Response, jsonify, request, render_template
 
 app = Flask(__name__)
 GH_TZ = ZoneInfo("Africa/Accra")
@@ -243,6 +243,40 @@ def home():
         "payment_webhook": "/paystack/webhook", "payment_email": PAYMENT_EMAIL,
         "vote_recording": "manual verification required",
         "mode": paystack_key_mode()})
+
+
+
+@app.get("/admin")
+def admin_dashboard():
+    # Public dashboard for now. It returns aggregate vote totals only.
+    return render_template("admin.html")
+
+
+@app.get("/api/vote-results")
+def vote_results():
+    """Return aggregate vote totals only; never expose voter or payment details."""
+    endpoint = os.getenv("GOOGLE_SHEETS_WEBAPP_URL", "").strip()
+    shared_secret = os.getenv("GOOGLE_SHEETS_SHARED_SECRET", "")
+    if not endpoint or not shared_secret:
+        return jsonify({"error": "Google Sheets dashboard integration is not configured"}), 503
+    try:
+        response = requests.post(
+            endpoint,
+            json={"token": shared_secret, "action": "get_vote_totals"},
+            timeout=20
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not payload.get("success") or not isinstance(payload.get("categories"), dict):
+            raise RuntimeError("Google Sheets returned an invalid dashboard response")
+        return jsonify({
+            "success": True,
+            "updated_at": datetime.now(GH_TZ).isoformat(),
+            "categories": payload["categories"]
+        })
+    except Exception:
+        app.logger.exception("Could not load aggregated vote totals")
+        return jsonify({"error": "Vote totals are temporarily unavailable"}), 502
 
 
 @app.get("/health")
